@@ -28,14 +28,14 @@ This solver has been tested and is compatible with **[FEniCSx v0.9.0](https://gi
 
 ## (Suggested) Location in the Main ParaSiF Repository
 
-`ParaSiF/dev/`
+`ParaSiF/dev/CHT/`
 
 ---
 
 ## Repository Structure
 
 ```
-ParaSiF/dev/
+ParaSiF/dev/CHT/
 ├── fluid/                # fluid OpenFOAM solvers folder
 │ ├── src/                # ParaSiF-specific OpenFOAM source code folder
 │ │ ├── solvers/          # ParaSiF-specific OpenFOAM solvers
