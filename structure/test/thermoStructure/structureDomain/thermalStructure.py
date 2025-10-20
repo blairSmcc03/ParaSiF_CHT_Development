@@ -58,20 +58,26 @@ num_steps = 200 # number of time steps
 
 kappa_val = 1.0  # thermal conductivity
 
-nx, ny, nz = 20, 10, 10  # mesh divisions in x,y,z directions
-p_min = np.array([-2.0, -1.0, -1.0], dtype=np.float64)  # domain min corner
-p_max = np.array([ 2.0,  1.0,  1.0], dtype=np.float64)  # domain max corner
+nx, ny, nz = 10, 20, 10  # mesh divisions in x,y,z directions
+p_min = np.array([-1.0, -2.0, -1.0], dtype=np.float64)  # domain min corner
+p_max = np.array([ 1.0,  2.0,  1.0], dtype=np.float64)  # domain max corner
 
-poly_order = 1 # finite element polynomial order
+poly_order = 2 # finite element polynomial order
 
-COUPLED_MARK = 88  # marker for coupled boundary facets
+LEFT_MARK = 88  # marker for left boundary facets
+RIGHT_MARK = 66  # marker for right boundary facets
 
-# Define the coupled boundary: left face at x = -2.0
-def coupled_boundary(x):
-    return np.isclose(x[0], -2.0)
+# Define the boundary: left face at x = -1.0
+def boundary_left(x):
+    return np.isclose(x[0], -1.0)
 
-T0 = 0.0 # baseline temperature
+# Define the boundary: right face at x = 1.0
+def boundary_right(x):
+    return np.isclose(x[0], 1.0)
+
+T0 = 0.0     # baseline temperature
 T_L = 500.0  # initial left boundary temperature
+T_R = 0.0    # initial right boundary temperature
 
 def line_mask(dof_coords_output): # mask for dofs along a 1-D line for ASCII output
     return (np.isclose(dof_coords_output[:, 1], 0.0, atol=1e-8) & 
@@ -98,7 +104,10 @@ domain = mesh.create_box(comm,
                          ghost_mode=mesh.GhostMode.shared_facet)
 
 gdim = domain.geometry.dim
+# Define a poly_order function space for simulation
 V = fem.functionspace(domain, ("Lagrange", poly_order))
+# Define a P1 function space for output
+V_out = fem.functionspace(domain, ("Lagrange", 1))
 kappa = fem.Constant(domain, PETSc.ScalarType(kappa_val))
 
 # -------------------------
@@ -117,21 +126,36 @@ boundary_dofs = fem.locate_dofs_topological(V, fdim, boundary_facets)
 if not quiet:
     print("Rank", comm.rank, "Number of boundary dofs:", len(boundary_dofs), "boundary facets:", len(boundary_facets))
 
-coupled_facets = mesh.locate_entities_boundary(domain, fdim, coupled_boundary)
-if coupled_facets.size == 0:
-    raise RuntimeError("No coupled facets found. Check boundary function or mesh coordinates.")
+left_facets = mesh.locate_entities_boundary(domain, fdim, boundary_left)
+if left_facets.size == 0:
+    raise RuntimeError("No left facets found. Check boundary function or mesh coordinates.")
 
-# marker id for the coupled boundary
-facet_tag = mesh.meshtags(domain, fdim, coupled_facets, np.full_like(coupled_facets, COUPLED_MARK))
+# marker id for the left boundary
+left_facet_tag = mesh.meshtags(domain, fdim, left_facets, np.full_like(left_facets, LEFT_MARK))
 
-# coupled DOFs for Dirichlet BC
-coupleddofs = fem.locate_dofs_topological(V, fdim, coupled_facets)
+# left DOFs for Dirichlet BC
+left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
 if not quiet:
-    print("Rank", comm.rank, "Number of coupled dofs:", len(coupleddofs))
+    print("Rank", comm.rank, "Number of left dofs:", len(left_dofs))
 
 # Extract coordinates of DOFs
 dof_coords = V.tabulate_dof_coordinates().reshape((-1, gdim))
-coupled_dof_coords = dof_coords[coupleddofs]
+left_dof_coords = dof_coords[left_dofs]
+
+
+right_facets = mesh.locate_entities_boundary(domain, fdim, boundary_right)
+if right_facets.size == 0:
+    raise RuntimeError("No right facets found. Check boundary function or mesh coordinates.")
+# marker id for the right boundary
+right_facet_tag = mesh.meshtags(domain, fdim, right_facets, np.full_like(right_facets, RIGHT_MARK))
+
+# right DOFs
+right_dofs = fem.locate_dofs_topological(V, fdim, right_facets)
+if not quiet:
+    print("Rank", comm.rank, "Number of left dofs:", len(right_dofs))
+
+# Extract coordinates of DOFs
+right_dof_coords = dof_coords[right_dofs]
 
 # -------------------------
 #%% Function to hold Dirichlet values
@@ -140,7 +164,7 @@ coupled_dof_coords = dof_coords[coupleddofs]
 u_bc = fem.Function(V)
 u_bc.name = "u_bc"
 
-# Create coupled boundary condition
+# Create left boundary condition
 class boundary_condition():
     def __init__(self, t, coupled_dof_coords):
         self.t = t
@@ -158,10 +182,12 @@ class boundary_condition():
                                x[2, on_boundary] * 0.0) + T_L  # steady 500K for testing
         return values
 
-u_boundary = boundary_condition(t, coupled_dof_coords)
+u_boundary = boundary_condition(t, left_dof_coords)
 u_bc.interpolate(u_boundary)
 
-bc = fem.dirichletbc(u_bc, coupleddofs)
+bc_left = fem.dirichletbc(u_bc, left_dofs)
+bc_right = fem.dirichletbc(u_bc, right_dofs)
+bc = [bc_left, bc_right]
 
 # -------------------------
 #%% Initial condition for interior
@@ -185,7 +211,7 @@ a = fem.form(ufl.lhs(F))
 L = fem.form(ufl.rhs(F))
 
 # Assemble matrix with Dirichlet BCs applied
-A = assemble_matrix(a, bcs=[bc])
+A = assemble_matrix(a, bcs=bc)
 A.assemble()
 b = create_vector(L)
 
@@ -193,6 +219,10 @@ b = create_vector(L)
 uh = fem.Function(V)
 uh.name = "uh"
 uh.x.array[:] = T0
+
+# Function for output at each time step
+uh_out = fem.Function(V_out)
+uh_out.interpolate(uh)
 
 # Set up PETSc KSP solver
 solver = PETSc.KSP().create(comm)
@@ -212,13 +242,13 @@ xdmf.write_mesh(domain)
 # -------------------------
 
 # Create UFL measure on boundary with subdomain_data
-ds = ufl.Measure("ds", domain=domain, subdomain_data=facet_tag)
+ds = ufl.Measure("ds", domain=domain, subdomain_data=left_facet_tag)
 # FacetNormal(domain) yields the outward normal on the domain boundary facets
 n = ufl.FacetNormal(domain)
 
 def compute_total_heat_flux(func_u):
     integrand = -kappa * ufl.dot(ufl.grad(func_u), n)
-    total = fem.assemble_scalar(fem.form(integrand * ds(COUPLED_MARK)))
+    total = fem.assemble_scalar(fem.form(integrand * ds(LEFT_MARK)))
     # assemble_scalar returns a scalar on each rank; convert to global sum
     total_global = comm.allreduce(total, op=MPI.SUM)
     return float(total_global)
@@ -244,26 +274,26 @@ def compute_heat_flux_on_coupled_boundary(V, u, kappa):
     flux = problem.solve()
 
     # Evaluate flux at these dofs
-    flux_vals = flux.x.array.reshape((-1, gdim))[coupleddofs]
+    flux_vals = flux.x.array.reshape((-1, gdim))[left_dofs]
 
     # Gather to root if needed
-    coupled_dof_coords_flux = np.array(coupled_dof_coords, dtype=np.float64)
+    left_dof_coords_flux = np.array(left_dof_coords, dtype=np.float64)
     flux_vals = np.array(flux_vals, dtype=np.float64)
 
     # Print flux values and coordinate components
     print("Heat flux vectors at coupled boundary DOFs:")
-    for coord, flux_vec in zip(coupled_dof_coords_flux, flux_vals):
+    for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
         x, y, z = coord  # unpack coordinate components
         print(f"x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
     
     # Gather to root if needed
-    coupled_dof_coords_flux = np.vstack(comm.allgather(coupled_dof_coords_flux))
+    left_dof_coords_flux = np.vstack(comm.allgather(left_dof_coords_flux))
     flux_vals = np.vstack(comm.allgather(flux_vals))
 
     # Compute total flux as sum of normal components at coupled DOFs
     total_flux = 0.0
-    for coord, flux_vec in zip(coupled_dof_coords_flux, flux_vals):
-        normal = np.array([0.0, -1.0, 0.0])  # normal vector on the left face at x = -2.0
+    for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
+        normal = np.array([-1.0, 0.0, 0.0])  # normal vector on the left face at x = -1.0
         total_flux += np.dot(flux_vec, normal)
 
     return total_flux
@@ -305,9 +335,9 @@ for step in range(1, num_steps + 1):
     assemble_vector(b, L)
 
     # Apply BCs to RHS
-    apply_lifting(b, [a], [[bc]])
+    apply_lifting(b, [a], [bc])
     b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
-    set_bc(b, [bc])
+    set_bc(b, bc)
 
     # Solve linear system A * uh = b
     solver.solve(b, uh.x.petsc_vec)
@@ -324,7 +354,8 @@ for step in range(1, num_steps + 1):
     u_n.x.array[:] = uh.x.array
 
     # Write solution to XDMF file
-    xdmf.write_function(uh, t)
+    uh_out.interpolate(uh)
+    xdmf.write_function(uh_out, t)
 
     # Write ASCII temperature timeseries at selected line DOFs
     if domain.comm.rank == 0:

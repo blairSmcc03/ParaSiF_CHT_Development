@@ -45,7 +45,7 @@ import matplotlib.pyplot as plt
 
 quiet = True  # define quiet mode
 kappa = 1.0 # thermal conductivity
-L = 4.0 # length of the 1-D domain
+L = 2.0 # length of the 1-D domain
 T_L, T_R, T0 = 500.0, 0.0, 0.0 # boundary and initial temperatures
 N_terms = 200  # number of series terms
 n_select = 5  # Define number of selected times including start and end
