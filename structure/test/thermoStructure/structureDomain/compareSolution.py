@@ -37,6 +37,7 @@
 # -------------------------
 
 import numpy as np
+from scipy.integrate import trapezoid
 import matplotlib.pyplot as plt
 
 # -------------------------
@@ -45,18 +46,19 @@ import matplotlib.pyplot as plt
 
 quiet = True  # define quiet mode
 kappa = 1.0 # thermal conductivity
-L = 4.0 # length of the 1-D domain
+L = 2.0 # length of the 1-D domain
 T_L, T_R, T0 = 500.0, 0.0, 0.0 # boundary and initial temperatures
 N_terms = 200  # number of series terms
 n_select = 5  # Define number of selected times including start and end
 line_coords_filename = "line_dofs_coords.dat" # FEniCSx line dof coordinates filename
 timeseries_filename = "dof_temperature_timeseries.dat" # FEniCSx temperature timeseries output filename
+q_R = 0.0  # Constant heat flux with unit of W/m² as Neumann BC value at right end
 
 # -------------------------
 #%% Analytical series solution
 # -------------------------
 
-def u_analytic(x, x0, t):
+def u_analytic_Dirichlet_Dirichlet(x, x0, t):
     # steady linear part
     u_s = T_L + (T_R - T_L) * (x-x0) / L
     # Fourier coefficients
@@ -69,6 +71,19 @@ def u_analytic(x, x0, t):
             b_n = (4*T0 - 2*T_L - 2*T_R) / (n * np.pi)
         u_sum += b_n * np.sin(k*(x-x0)) * np.exp(-kappa * k**2 * t)
     return u_s + u_sum
+
+def u_analytic_Dirichlet_Neumann(x, x0, t):
+    # Steady linear part (Dirichlet–Neumann)
+    u_s = T_L - (q_R / kappa) * (x-x0)
+    # Series solution for transient component
+    theta = np.zeros_like((x-x0))
+    for n in range(N_terms):
+        k_n = (2*n + 1) * np.pi / (2*L)
+        # Fourier coefficient for initial condition deviation
+        A_n = (2 / L) * trapezoid((T0 - u_s) * np.sin(k_n * (x - x0)), (x - x0))
+        theta += A_n * np.sin(k_n * (x-x0)) * np.exp(-kappa * k_n**2 * t)
+
+    return u_s + theta
 
 # -------------------------
 #%% Load FEniCSx ASCII data
@@ -95,7 +110,7 @@ if not quiet:
 for t_sel in select_times:
     # find nearest time index in FEniCSx output
     idx = np.argmin(np.abs(times - t_sel))
-    T_ana = u_analytic(coords, x_left, times[idx])
+    T_ana = u_analytic_Dirichlet_Dirichlet(coords, x_left, times[idx])
     plt.figure()
     plt.plot(coords, T_ana, 'k-', lw=2, label="Analytical")
     plt.plot(coords, T_num[idx,:], 'ro', mfc='none', label="FEniCSx thermal solver")
