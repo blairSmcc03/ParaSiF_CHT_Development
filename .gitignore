@@ -3,3 +3,6 @@
 *.dat
 *.h5
 *.xdmf
+*PUSHER_FETCHER_1
+**build/
+*heatFluxCpp.txt
