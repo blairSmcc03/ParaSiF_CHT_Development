@@ -115,9 +115,6 @@ if iMUICoupling:
     ifaces3d = mui4py.create_unifaces(domain, iface, config3d)
     ifaces3d["threeDInterface0"].set_data_types(data_types)
 
-    # App common world claims
-    LOCAL_COMM_WORLD = mui4py.mpi_split_by_app()
-
 else:
     LOCAL_COMM_WORLD = MPI.COMM_WORLD
 
@@ -175,7 +172,7 @@ boundary_facets = mesh.exterior_facet_indices(domain.topology)
 # all boundary DOFs
 boundary_dofs = fem.locate_dofs_topological(V, fdim, boundary_facets)
 if not quiet:
-    print("Rank", LOCAL_COMM_WORLD.rank, "Number of boundary dofs:", len(boundary_dofs), "boundary facets:", len(boundary_facets))
+    print("{{FENICS}} Rank", LOCAL_COMM_WORLD.rank, "Number of boundary dofs:", len(boundary_dofs), "boundary facets:", len(boundary_facets))
 
 left_facets = mesh.locate_entities_boundary(domain, fdim, boundary_left)
 if left_facets.size == 0:
@@ -187,7 +184,7 @@ left_facet_tag = mesh.meshtags(domain, fdim, left_facets, np.full_like(left_face
 # left DOFs for Dirichlet BC
 left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
 if not quiet:
-    print("Rank", LOCAL_COMM_WORLD.rank, "Number of left dofs:", len(left_dofs))
+    print("{{FENICS}} Rank", LOCAL_COMM_WORLD.rank, "Number of left dofs:", len(left_dofs))
 
 # Extract coordinates of DOFs
 dof_coords = V.tabulate_dof_coordinates().reshape((-1, gdim))
@@ -203,7 +200,7 @@ right_facet_tag = mesh.meshtags(domain, fdim, right_facets, np.full_like(right_f
 # right DOFs
 right_dofs = fem.locate_dofs_topological(V, fdim, right_facets)
 if not quiet:
-    print("Rank", LOCAL_COMM_WORLD.rank, "Number of left dofs:", len(right_dofs))
+    print("{{FENICS}} Rank", LOCAL_COMM_WORLD.rank, "Number of left dofs:", len(right_dofs))
 
 # Extract coordinates of DOFs
 right_dof_coords = dof_coords[right_dofs]
@@ -219,8 +216,12 @@ u_bc.name = "u_bc"
 class boundary_condition():
     def __init__(self, t, coupled_dof_coords):
         self.t = t
-        self.steps = int(round((t - t0) / dt)) # current time step
         self.tree = cKDTree(coupled_dof_coords)  # build KDTree for coupled DOF coords
+
+    def update_time(self, t):
+        """Update current simulation time before interpolation."""
+        self.t = t
+        self.steps = int(round((t - t0) / dt))  # update time step
 
     def __call__(self, x):
         tol = 1e-8
@@ -229,13 +230,18 @@ class boundary_condition():
         # Query nearest boundary point distance for each x
         dist, _ = self.tree.query(x.T)
         on_boundary = dist < tol
+        # Use only the boundary coordinates
+        x_boundary = x[:, on_boundary]
+        dofs_boundary = x_boundary.T
         if iMUICoupling and (abs(t - t0) > 1e-12):
             values[on_boundary] = ifaces3d["threeDInterface0"].\
                                     fetch_many("temperature",
-                                                x.T,
+                                                dofs_boundary,
                                                 self.steps,
                                                 s_sampler,
                                                 t_sampler)
+            if not quiet:
+                print("Boundary values:", values[on_boundary], " Dof Boundary: ", dofs_boundary, " self.steps: ", self.steps)
         else:
             values[on_boundary] = (x[0, on_boundary] *
                                    x[1, on_boundary] *
@@ -243,6 +249,7 @@ class boundary_condition():
         return values
 
 u_boundary = boundary_condition(t, left_dof_coords)
+u_boundary.update_time(t)
 u_bc.interpolate(u_boundary)
 
 bc_left = fem.dirichletbc(u_bc, left_dofs)
@@ -262,13 +269,13 @@ q_flux.name = "q_flux"
 
 area_right = (p_max[1] - p_min[1]) * (p_max[2] - p_min[2])
 if not quiet:
-    print("Right boundary area:", area_right)
+    print("{{FENICS}} Right boundary area:", area_right)
 q_R_total = q_R * area_right
 if not quiet:
-    print("Total heat flux at right boundary (W):", q_R_total)
+    print("{{FENICS}} Total heat flux at right boundary (W):", q_R_total)
 q_R_per_dof = q_R_total / len(right_dofs)
 if not quiet:
-    print("Heat flux per right boundary DOF (W):", q_R_per_dof)
+    print("{{FENICS}} Heat flux per right boundary DOF (W):", q_R_per_dof)
 
 def update_flux_from_external(t):
     """Update boundary flux values from external solver."""
@@ -380,16 +387,16 @@ def compute_heat_flux_on_left_boundary(t, u, kappa):
         ifaces3d["threeDInterface0"].push_many("heatFluxx", left_dof_coords_flux, flux_vals[:, 0])
         ifaces3d["threeDInterface0"].push_many("heatFluxy", left_dof_coords_flux, flux_vals[:, 1])
         ifaces3d["threeDInterface0"].push_many("heatFluxz", left_dof_coords_flux, flux_vals[:, 2])
-        ifaces3d.commit(int(round((t - t0) / dt)))
+        ifaces3d["threeDInterface0"].commit(int(round((t - t0) / dt)))
         if not quiet:
-            print('{FENICS} MUI commit step: ',int(round((t - t0) / dt)))
+            print('{{FENICS}} MUI commit step: ',int(round((t - t0) / dt)))
 
     # Print flux values and coordinate components
     if not quiet:
-        print("Heat flux vectors at coupled boundary DOFs:")
+        print("{{FENICS}} Heat flux vectors at coupled boundary DOFs:")
         for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
             x, y, z = coord  # unpack coordinate components
-            print(f"x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
+            print(f"{{FENICS}} x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
 
     # Gather to root if needed
     left_dof_coords_flux = np.vstack(LOCAL_COMM_WORLD.allgather(left_dof_coords_flux))
@@ -451,10 +458,10 @@ if iMUICoupling:
 
 for step in range(1, num_steps + 1):
     t += dt
-    print(f"[rank {LOCAL_COMM_WORLD.rank}] Time step {step}/{num_steps}, t = {t:.6f}")
+    print(f"{{FENICS}} [rank {LOCAL_COMM_WORLD.rank}] Time step {step}/{num_steps}, t = {t:.6f}")
 
     # Update Diriclet boundary condition
-    u_boundary.t += dt
+    u_boundary.update_time(t)
     u_bc.interpolate(u_boundary)
 
     # Update heat flux
@@ -463,7 +470,7 @@ for step in range(1, num_steps + 1):
     if not quiet:
         if LOCAL_COMM_WORLD.rank == 0:
             # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
-            print(f"  Total heat flux across right boundary (integral) = {total_flux_right:.6e}")
+            print(f"{{FENICS}}  Total heat flux across right boundary (integral) = {total_flux_right:.6e}")
 
     # Assemble RHS with current u_n
     with b.localForm() as loc_b:
@@ -485,7 +492,7 @@ for step in range(1, num_steps + 1):
     if not quiet:
         if LOCAL_COMM_WORLD.rank == 0:
             # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
-            print(f"  Total heat flux across coupled boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
+            print(f"{{FENICS}}  Total heat flux across coupled boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
 
     # Update u_n for next time step
     u_n.x.array[:] = uh.x.array
@@ -510,6 +517,9 @@ if LOCAL_COMM_WORLD.rank == 0:
 xdmf.close()
 # Indicate run completion
 if LOCAL_COMM_WORLD.rank == 0:
-    print("Run complete.")
+    print("{{FENICS}} Run complete.")
+
+if iMUICoupling:
+    MPI.Finalize()
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%  FILE END  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%#
