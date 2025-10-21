@@ -17,10 +17,24 @@ solverFluid=./PUSHER_FETCHER_1
 solverStructure=thermalStructure.py
 
 cd ${domainFluid}
+
+# Create build folder
+mkdir build && cd build
+
+# Check if an argument was provided
+cmake -DCMAKE_PREFIX_PATH=$(pwd)/../../../../../../../coupling_lib/MUI ..
+
+# Run make to build the executable
+make 2>&1 | tee make.log && cd ..
+cp build/PUSHER_FETCHER_1 ./
+
 cd ..
 
 # parallel run
-mpirun -np ${numProcsStructure} -wdir ${domainStructure} python3 -m mpi4py ${solverStructure} 2>&1 | tee output.log
+mpirun -np ${numProcsFluid} -wdir ${domainFluid} ${solverFluid} -parallel -coupled :\
+       -np ${numProcsStructure} -wdir ${domainStructure} python3 -m mpi4py ${solverStructure} 2>&1 | tee output.log
+
+python3 structureDomain/compareSolution.py
 
 echo "Done"
 
