@@ -78,6 +78,7 @@ def boundary_right(x):
 T0 = 0.0     # baseline temperature
 T_L = 500.0  # initial left boundary temperature
 T_R = 0.0    # initial right boundary temperature
+q_R = 0.0    # Constant heat flux with unit of W/m² as Neumann BC value at right end
 
 def line_mask(dof_coords_output): # mask for dofs along a 1-D line for ASCII output
     return (np.isclose(dof_coords_output[:, 1], 0.0, atol=1e-8) & 
@@ -194,18 +195,36 @@ bc = [bc_left, bc_right]
 # -------------------------
 
 ds_right = ufl.Measure("ds", domain=domain, subdomain_data=right_facet_tag)
+# FacetNormal(domain) yields the outward normal on the domain boundary facets
+n = ufl.FacetNormal(domain)
 
 q_flux = fem.Function(V)
 q_flux.name = "q_flux"
+
+area_right = (p_max[1] - p_min[1]) * (p_max[2] - p_min[2])
+if not quiet:
+    print("Right boundary area:", area_right)
+q_R_total = q_R * area_right
+if not quiet:
+    print("Total heat flux at right boundary (W):", q_R_total)
+q_R_per_dof = q_R_total / len(right_dofs)
+if not quiet:
+    print("Heat flux per right boundary DOF (W):", q_R_per_dof)
 
 def update_flux_from_external(t):
     """Update boundary flux values from external solver."""
     q_flux_array = q_flux.x.array
     for i, dof in enumerate(right_dofs):
         coord = right_dof_coords[i]
-        q_flux_array[dof] = coord[0] * coord[1] * coord[2] * t * 0.0  # steady 0W for testing
-    q_flux.x.array[:] = q_flux_array
+        q_flux_array[dof] = coord[0] * coord[1] * coord[2] * t * 0.0 + q_R_per_dof  # steady flux for testing
     q_flux.x.scatter_forward()
+
+def compute_total_right_heat_flux(func_u):
+    integrand = -kappa * ufl.dot(ufl.grad(func_u), n)
+    total = fem.assemble_scalar(fem.form(integrand * ds_right(RIGHT_MARK)))
+    # assemble_scalar returns a scalar on each rank; convert to global sum
+    total_global = comm.allreduce(total, op=MPI.SUM)
+    return float(total_global)
 
 update_flux_from_external(0.0)
 
@@ -263,8 +282,6 @@ xdmf.write_mesh(domain)
 
 # Create UFL measure on boundary with subdomain_data
 ds_left = ufl.Measure("ds", domain=domain, subdomain_data=left_facet_tag)
-# FacetNormal(domain) yields the outward normal on the domain boundary facets
-n = ufl.FacetNormal(domain)
 
 def compute_total_left_heat_flux(func_u):
     integrand = -kappa * ufl.dot(ufl.grad(func_u), n)
@@ -301,11 +318,12 @@ def compute_heat_flux_on_left_boundary(V, u, kappa):
     flux_vals = np.array(flux_vals, dtype=np.float64)
 
     # Print flux values and coordinate components
-    print("Heat flux vectors at coupled boundary DOFs:")
-    for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
-        x, y, z = coord  # unpack coordinate components
-        print(f"x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
-    
+    if not quiet:
+        print("Heat flux vectors at coupled boundary DOFs:")
+        for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
+            x, y, z = coord  # unpack coordinate components
+            print(f"x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
+
     # Gather to root if needed
     left_dof_coords_flux = np.vstack(comm.allgather(left_dof_coords_flux))
     flux_vals = np.vstack(comm.allgather(flux_vals))
@@ -351,6 +369,11 @@ for step in range(1, num_steps + 1):
 
     # Update heat flux
     update_flux_from_external(t)
+    total_flux_right = compute_total_right_heat_flux(uh)
+    if not quiet:
+        if comm.rank == 0:
+            # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
+            print(f"  Total heat flux across right boundary (integral) = {total_flux_right:.6e}")
 
     # Assemble RHS with current u_n
     with b.localForm() as loc_b:
@@ -369,9 +392,10 @@ for step in range(1, num_steps + 1):
     # Compute heat flux across the coupled boundary
     total_flux_push = compute_heat_flux_on_left_boundary(V, uh, kappa)
     total_flux = compute_total_left_heat_flux(uh)
-    if comm.rank == 0:
-        # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
-        print(f"  Total heat flux across coupled boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
+    if not quiet:
+        if comm.rank == 0:
+            # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
+            print(f"  Total heat flux across coupled boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
 
     # Update u_n for next time step
     u_n.x.array[:] = uh.x.array
