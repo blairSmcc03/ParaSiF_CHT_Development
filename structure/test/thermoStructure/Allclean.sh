@@ -4,7 +4,12 @@ domainFluid=${PWD}/dummyFluid
 domainStructure=${PWD}/structureDomain
 
 cd ${domainFluid}
+rm -f *.log
+rm heatFluxCpp.txt
+rm PUSHER_FETCHER_1
+cd build make clean
 cd ..
+rm -fr build
 
 cd ${domainStructure}
 rm -r *.h5

@@ -33,28 +33,29 @@
 """
 
 # -------------------------
-#%% Import packages
+#%% Import general packages
 # -------------------------
 
 import numpy as np
-import ufl
-from petsc4py import PETSc
-from mpi4py import MPI
-from dolfinx import fem, mesh, io
-from dolfinx.fem.petsc import assemble_vector, assemble_matrix, create_vector, apply_lifting, set_bc, LinearProblem
 from scipy.spatial import cKDTree
-
-comm = MPI.COMM_WORLD
 
 # -------------------------
 #%% Control parameters
 # -------------------------
 
 quiet = True  # define quiet mode
+debug = False # define debug mode
 
-t = 0.0  # initial time
+iMUICoupling = True  # whether to enable MUI coupling
+synchronised=False   # synchronised for announce span
+rMUIFetcher = 1.0    # MUI seatch redius
+push_coord_dtype = np.float32 # numpy data types for push coordinates
+push_flux_dtype = np.float64  # numpy data types for push values
+
+t0 = 0.0  # initial time
 T = 1.0  # final time
 num_steps = 200 # number of time steps
+num_iterations = 1 # number sub-iterations per time step
 
 kappa_val = 1.0  # thermal conductivity
 
@@ -89,16 +90,65 @@ line_coords_filename = "line_dofs_coords.dat" # line dof coordinates output file
 timeseries_filename = "dof_temperature_timeseries.dat" # temperature timeseries output filename
 
 # -------------------------
+#%% initialise MUI/MPI for coupling
+# -------------------------
+
+if iMUICoupling:
+    from mpi4py import MPI
+    import mui4py
+    import petsc4py
+    # MUI parameters
+    dimensionMUI = 3
+    data_types = {"temperature": mui4py.FLOAT64,
+                  "heatFluxx": mui4py.FLOAT64,
+                  "heatFluxy": mui4py.FLOAT64,
+                  "heatFluxz": mui4py.FLOAT64}
+    # MUI interface creation
+    domain = "structureDomain"
+    config3d = mui4py.Config(dimensionMUI, mui4py.FLOAT64)
+
+    # App common world claims
+    LOCAL_COMM_WORLD = mui4py.mpi_split_by_app(argc=0,
+                                            argv=[],
+                                            threadType=-1,
+                                            thread_support=0,
+                                            use_mpi_comm_split=True)
+
+    iface = ["threeDInterface0"]
+    ifaces3d = mui4py.create_unifaces(domain, iface, config3d)
+    ifaces3d["threeDInterface0"].set_data_types(data_types)
+
+else:
+    LOCAL_COMM_WORLD = MPI.COMM_WORLD
+
+# Necessary to avoid hangs at PETSc vector communication
+petsc4py.init(comm=LOCAL_COMM_WORLD)
+# Define local communicator rank
+rank = LOCAL_COMM_WORLD.Get_rank()
+# Define local communicator size
+size = LOCAL_COMM_WORLD.Get_size()
+
+# -------------------------
+#%% Import FEniCSx packages
+# -------------------------
+
+from petsc4py import PETSc
+import ufl
+from dolfinx import fem, mesh, io
+from dolfinx.fem.petsc import assemble_vector, assemble_matrix, create_vector, apply_lifting, set_bc, LinearProblem
+
+# -------------------------
 #%% Problem / time parameters
 # -------------------------
 
-dt = (T - t) / num_steps # time step size
+t = t0 # time
+dt = (T - t0) / num_steps # time step size
 
 # -------------------------
 #%% Create mesh and function space
 # -------------------------
 
-domain = mesh.create_box(comm,
+domain = mesh.create_box(LOCAL_COMM_WORLD,
                          [p_min, p_max],
                          [nx, ny, nz],
                          cell_type=mesh.CellType.hexahedron,
@@ -125,7 +175,7 @@ boundary_facets = mesh.exterior_facet_indices(domain.topology)
 # all boundary DOFs
 boundary_dofs = fem.locate_dofs_topological(V, fdim, boundary_facets)
 if not quiet:
-    print("Rank", comm.rank, "Number of boundary dofs:", len(boundary_dofs), "boundary facets:", len(boundary_facets))
+    print("{{FENICS}} Rank", LOCAL_COMM_WORLD.rank, "Number of boundary dofs:", len(boundary_dofs), "boundary facets:", len(boundary_facets))
 
 left_facets = mesh.locate_entities_boundary(domain, fdim, boundary_left)
 if left_facets.size == 0:
@@ -137,7 +187,7 @@ left_facet_tag = mesh.meshtags(domain, fdim, left_facets, np.full_like(left_face
 # left DOFs for Dirichlet BC
 left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
 if not quiet:
-    print("Rank", comm.rank, "Number of left dofs:", len(left_dofs))
+    print("{{FENICS}} Rank", LOCAL_COMM_WORLD.rank, "Number of left dofs:", len(left_dofs))
 
 # Extract coordinates of DOFs
 dof_coords = V.tabulate_dof_coordinates().reshape((-1, gdim))
@@ -153,7 +203,7 @@ right_facet_tag = mesh.meshtags(domain, fdim, right_facets, np.full_like(right_f
 # right DOFs
 right_dofs = fem.locate_dofs_topological(V, fdim, right_facets)
 if not quiet:
-    print("Rank", comm.rank, "Number of left dofs:", len(right_dofs))
+    print("{{FENICS}} Rank", LOCAL_COMM_WORLD.rank, "Number of left dofs:", len(right_dofs))
 
 # Extract coordinates of DOFs
 right_dof_coords = dof_coords[right_dofs]
@@ -171,6 +221,11 @@ class boundary_condition():
         self.t = t
         self.tree = cKDTree(coupled_dof_coords)  # build KDTree for coupled DOF coords
 
+    def update_time(self, t):
+        """Update current simulation time before interpolation."""
+        self.t = t
+        self.steps = int(round((t - t0) / dt))  # update time step
+
     def __call__(self, x):
         tol = 1e-8
         values = np.zeros(x.shape[1])
@@ -178,12 +233,26 @@ class boundary_condition():
         # Query nearest boundary point distance for each x
         dist, _ = self.tree.query(x.T)
         on_boundary = dist < tol
-        values[on_boundary] = (x[0, on_boundary] *
-                               x[1, on_boundary] *
-                               x[2, on_boundary] * 0.0) + T_L  # steady 500K for testing
+        # Use only the boundary coordinates
+        x_boundary = x[:, on_boundary]
+        dofs_boundary = x_boundary.T
+        if iMUICoupling and (abs(t - t0) > 1e-12):
+            values[on_boundary] = ifaces3d["threeDInterface0"].\
+                                    fetch_many("temperature",
+                                                dofs_boundary,
+                                                self.steps,
+                                                s_sampler,
+                                                t_sampler)
+            if (not quiet) and debug:
+                print("Boundary values:", values[on_boundary], " Dof Boundary: ", dofs_boundary, " self.steps: ", self.steps)
+        else:
+            values[on_boundary] = (x[0, on_boundary] *
+                                   x[1, on_boundary] *
+                                   x[2, on_boundary] * 0.0) + T_L  # steady 500K for testing
         return values
 
 u_boundary = boundary_condition(t, left_dof_coords)
+u_boundary.update_time(t)
 u_bc.interpolate(u_boundary)
 
 bc_left = fem.dirichletbc(u_bc, left_dofs)
@@ -202,14 +271,14 @@ q_flux = fem.Function(V)
 q_flux.name = "q_flux"
 
 area_right = (p_max[1] - p_min[1]) * (p_max[2] - p_min[2])
-if not quiet:
-    print("Right boundary area:", area_right)
+if (not quiet) and debug:
+    print("{{FENICS}} Right boundary area:", area_right)
 q_R_total = q_R * area_right
-if not quiet:
-    print("Total heat flux at right boundary (W):", q_R_total)
+if (not quiet) and debug:
+    print("{{FENICS}} Total heat flux at right boundary (W):", q_R_total)
 q_R_per_dof = q_R_total / len(right_dofs)
-if not quiet:
-    print("Heat flux per right boundary DOF (W):", q_R_per_dof)
+if (not quiet) and debug:
+    print("{{FENICS}} Heat flux per right boundary DOF (W):", q_R_per_dof)
 
 def update_flux_from_external(t):
     """Update boundary flux values from external solver."""
@@ -223,7 +292,7 @@ def compute_total_right_heat_flux(func_u):
     integrand = -kappa * ufl.dot(ufl.grad(func_u), n)
     total = fem.assemble_scalar(fem.form(integrand * ds_right(RIGHT_MARK)))
     # assemble_scalar returns a scalar on each rank; convert to global sum
-    total_global = comm.allreduce(total, op=MPI.SUM)
+    total_global = LOCAL_COMM_WORLD.allreduce(total, op=MPI.SUM)
     return float(total_global)
 
 update_flux_from_external(0.0)
@@ -264,7 +333,7 @@ uh_out = fem.Function(V_out)
 uh_out.interpolate(uh)
 
 # Set up PETSc KSP solver
-solver = PETSc.KSP().create(comm)
+solver = PETSc.KSP().create(LOCAL_COMM_WORLD)
 solver.setOperators(A)
 solver.setType(PETSc.KSP.Type.PREONLY)
 solver.getPC().setType(PETSc.PC.Type.LU)
@@ -273,7 +342,7 @@ solver.getPC().setType(PETSc.PC.Type.LU)
 #%% Setup XDMF output
 # -------------------------
 
-xdmf = io.XDMFFile(comm, xdmf_filename, "w")
+xdmf = io.XDMFFile(LOCAL_COMM_WORLD, xdmf_filename, "w")
 xdmf.write_mesh(domain)
 
 # -------------------------
@@ -287,11 +356,11 @@ def compute_total_left_heat_flux(func_u):
     integrand = -kappa * ufl.dot(ufl.grad(func_u), n)
     total = fem.assemble_scalar(fem.form(integrand * ds_left(LEFT_MARK)))
     # assemble_scalar returns a scalar on each rank; convert to global sum
-    total_global = comm.allreduce(total, op=MPI.SUM)
+    total_global = LOCAL_COMM_WORLD.allreduce(total, op=MPI.SUM)
     return float(total_global)
 
 # Compute local heat flux vector and coordinates at each DOF on the coupled boundary.
-def compute_heat_flux_on_left_boundary(V, u, kappa):
+def compute_heat_flux_on_left_boundary(t, u, kappa):
     # Create vector function space for flux
     V_g = fem.functionspace(domain, ("Lagrange", poly_order, (domain.geometry.dim, )))
 
@@ -314,19 +383,29 @@ def compute_heat_flux_on_left_boundary(V, u, kappa):
     flux_vals = flux.x.array.reshape((-1, gdim))[left_dofs]
 
     # Gather to root if needed
-    left_dof_coords_flux = np.array(left_dof_coords, dtype=np.float64)
-    flux_vals = np.array(flux_vals, dtype=np.float64)
+    left_dof_coords_flux = np.array(left_dof_coords, dtype=push_coord_dtype)
+    flux_vals = np.array(flux_vals, dtype=push_flux_dtype)
+
+    if iMUICoupling:
+        ifaces3d["threeDInterface0"].push_many("heatFluxx", left_dof_coords_flux, flux_vals[:, 0])
+        ifaces3d["threeDInterface0"].push_many("heatFluxy", left_dof_coords_flux, flux_vals[:, 1])
+        ifaces3d["threeDInterface0"].push_many("heatFluxz", left_dof_coords_flux, flux_vals[:, 2])
+        ifaces3d["threeDInterface0"].commit(int(round((t - t0) / dt)))
+        if not quiet:
+            print('{{FENICS}} MUI commit step: ',int(round((t - t0) / dt)))
+            if debug:
+                print('{{FENICS}} Push at: ', left_dof_coords_flux, ' flux_vals[:, 0]: ', flux_vals[:, 0], ' at ', int(round((t - t0) / dt)))
 
     # Print flux values and coordinate components
-    if not quiet:
-        print("Heat flux vectors at coupled boundary DOFs:")
+    if not quiet and debug:
+        print("{{FENICS}} Heat flux vectors at coupled boundary DOFs:")
         for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
             x, y, z = coord  # unpack coordinate components
-            print(f"x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
+            print(f"{{FENICS}} x = {x:.6f}, y = {y:.6f}, z = {z:.6f} | Flux = [{flux_vec[0]:.6e}, {flux_vec[1]:.6e}, {flux_vec[2]:.6e}]")
 
     # Gather to root if needed
-    left_dof_coords_flux = np.vstack(comm.allgather(left_dof_coords_flux))
-    flux_vals = np.vstack(comm.allgather(flux_vals))
+    left_dof_coords_flux = np.vstack(LOCAL_COMM_WORLD.allgather(left_dof_coords_flux))
+    flux_vals = np.vstack(LOCAL_COMM_WORLD.allgather(flux_vals))
 
     # Compute total flux as sum of normal components at coupled DOFs
     total_flux = 0.0
@@ -347,7 +426,7 @@ sort_idx = np.argsort(line_coords)
 line_dofs = line_dofs[sort_idx]
 line_coords = line_coords[sort_idx]
 
-if domain.comm.rank == 0:
+if LOCAL_COMM_WORLD.rank == 0:
      # Save DOF coordinates along the selected line
     np.savetxt(line_coords_filename, line_coords)
     # Open ASCII file for temperature time series
@@ -356,24 +435,51 @@ if domain.comm.rank == 0:
     f_ascii.write(header + "\n")
 
 # -------------------------
+#%% Define MUI samplers and commit ZERO step
+# -------------------------
+
+if iMUICoupling:
+    if len(dof_coords) != 0:
+        domain_mins = np.min(dof_coords, axis=0)
+        domain_maxs = np.max(dof_coords, axis=0)
+
+        if np.any(domain_maxs < domain_mins):
+            print(f"{{** FENICS ERROR **}} Invalid bounding box at rank {rank}")
+
+        span = mui4py.geometry.Box(domain_mins, domain_maxs)
+
+        # Announce MUI send span
+        ifaces3d["threeDInterface0"].announce_send_span(0, num_steps*num_iterations, span, synchronised)
+        ifaces3d["threeDInterface0"].announce_recv_span(0, num_steps*num_iterations, span, synchronised)
+
+        print(f"{{FENICS}} rank {rank} send_recv_min: {domain_mins}, send_recv_max: {domain_maxs}")
+
+    t_sampler = mui4py.TemporalSamplerExact()
+    s_sampler = mui4py.SamplerPseudoNearestNeighbor(rMUIFetcher)
+
+    # Commit ZERO step before time stepping
+    ifaces3d["threeDInterface0"].commit(0)
+    print(f"{{FENICS}} Commit ZERO step")
+
+# -------------------------
 #%% Time-stepping loop
 # -------------------------
 
 for step in range(1, num_steps + 1):
     t += dt
-    print(f"[rank {comm.rank}] Time step {step}/{num_steps}, t = {t:.6f}")
+    print(f"{{FENICS}} [rank {LOCAL_COMM_WORLD.rank}] Time step {step}/{num_steps}, t = {t:.6f}")
 
     # Update Diriclet boundary condition
-    u_boundary.t += dt
+    u_boundary.update_time(t)
     u_bc.interpolate(u_boundary)
 
     # Update heat flux
     update_flux_from_external(t)
     total_flux_right = compute_total_right_heat_flux(uh)
     if not quiet:
-        if comm.rank == 0:
+        if LOCAL_COMM_WORLD.rank == 0:
             # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
-            print(f"  Total heat flux across right boundary (integral) = {total_flux_right:.6e}")
+            print(f"{{FENICS}}  Total heat flux across right boundary (integral) = {total_flux_right:.6e}")
 
     # Assemble RHS with current u_n
     with b.localForm() as loc_b:
@@ -389,13 +495,13 @@ for step in range(1, num_steps + 1):
     solver.solve(b, uh.x.petsc_vec)
     uh.x.scatter_forward()
 
-    # Compute heat flux across the coupled boundary
-    total_flux_push = compute_heat_flux_on_left_boundary(V, uh, kappa)
+    # Compute heat flux across the left boundary
+    total_flux_push = compute_heat_flux_on_left_boundary(t, uh, kappa)
     total_flux = compute_total_left_heat_flux(uh)
     if not quiet:
-        if comm.rank == 0:
+        if LOCAL_COMM_WORLD.rank == 0:
             # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
-            print(f"  Total heat flux across coupled boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
+            print(f"{{FENICS}}  Total heat flux across left boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
 
     # Update u_n for next time step
     u_n.x.array[:] = uh.x.array
@@ -405,7 +511,7 @@ for step in range(1, num_steps + 1):
     xdmf.write_function(uh_out, t)
 
     # Write ASCII temperature timeseries at selected line DOFs
-    if domain.comm.rank == 0:
+    if LOCAL_COMM_WORLD.rank == 0:
         line_temps = uh.x.array[line_dofs]
         f_ascii.write(f"{t:.6f} " + " ".join(f"{temp:.6f}" for temp in line_temps) + "\n")
 
@@ -414,12 +520,15 @@ for step in range(1, num_steps + 1):
 # -------------------------
 
 # Close ASCII file after time-stepping
-if domain.comm.rank == 0:
+if LOCAL_COMM_WORLD.rank == 0:
     f_ascii.close()
 # Close XDMF file after time-stepping
 xdmf.close()
 # Indicate run completion
-if comm.rank == 0:
-    print("Run complete.")
+if LOCAL_COMM_WORLD.rank == 0:
+    print("{{FENICS}} Run complete.")
+
+if iMUICoupling:
+    ifaces3d["threeDInterface0"].barrier(-888)
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%  FILE END  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%#
