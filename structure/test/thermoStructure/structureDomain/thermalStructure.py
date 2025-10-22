@@ -44,10 +44,13 @@ from scipy.spatial import cKDTree
 # -------------------------
 
 quiet = True  # define quiet mode
+debug = False # define debug mode
 
 iMUICoupling = True  # whether to enable MUI coupling
 synchronised=False   # synchronised for announce span
 rMUIFetcher = 1.0    # MUI seatch redius
+push_coord_dtype = np.float32 # numpy data types for push coordinates
+push_flux_dtype = np.float64  # numpy data types for push values
 
 t0 = 0.0  # initial time
 T = 1.0  # final time
@@ -240,7 +243,7 @@ class boundary_condition():
                                                 self.steps,
                                                 s_sampler,
                                                 t_sampler)
-            if not quiet:
+            if (not quiet) and debug:
                 print("Boundary values:", values[on_boundary], " Dof Boundary: ", dofs_boundary, " self.steps: ", self.steps)
         else:
             values[on_boundary] = (x[0, on_boundary] *
@@ -268,13 +271,13 @@ q_flux = fem.Function(V)
 q_flux.name = "q_flux"
 
 area_right = (p_max[1] - p_min[1]) * (p_max[2] - p_min[2])
-if not quiet:
+if (not quiet) and debug:
     print("{{FENICS}} Right boundary area:", area_right)
 q_R_total = q_R * area_right
-if not quiet:
+if (not quiet) and debug:
     print("{{FENICS}} Total heat flux at right boundary (W):", q_R_total)
 q_R_per_dof = q_R_total / len(right_dofs)
-if not quiet:
+if (not quiet) and debug:
     print("{{FENICS}} Heat flux per right boundary DOF (W):", q_R_per_dof)
 
 def update_flux_from_external(t):
@@ -380,8 +383,8 @@ def compute_heat_flux_on_left_boundary(t, u, kappa):
     flux_vals = flux.x.array.reshape((-1, gdim))[left_dofs]
 
     # Gather to root if needed
-    left_dof_coords_flux = np.array(left_dof_coords, dtype=np.float64)
-    flux_vals = np.array(flux_vals, dtype=np.float64)
+    left_dof_coords_flux = np.array(left_dof_coords, dtype=push_coord_dtype)
+    flux_vals = np.array(flux_vals, dtype=push_flux_dtype)
 
     if iMUICoupling:
         ifaces3d["threeDInterface0"].push_many("heatFluxx", left_dof_coords_flux, flux_vals[:, 0])
@@ -390,9 +393,11 @@ def compute_heat_flux_on_left_boundary(t, u, kappa):
         ifaces3d["threeDInterface0"].commit(int(round((t - t0) / dt)))
         if not quiet:
             print('{{FENICS}} MUI commit step: ',int(round((t - t0) / dt)))
+            if debug:
+                print('{{FENICS}} Push at: ', left_dof_coords_flux, ' flux_vals[:, 0]: ', flux_vals[:, 0], ' at ', int(round((t - t0) / dt)))
 
     # Print flux values and coordinate components
-    if not quiet:
+    if not quiet and debug:
         print("{{FENICS}} Heat flux vectors at coupled boundary DOFs:")
         for coord, flux_vec in zip(left_dof_coords_flux, flux_vals):
             x, y, z = coord  # unpack coordinate components
@@ -452,6 +457,10 @@ if iMUICoupling:
     t_sampler = mui4py.TemporalSamplerExact()
     s_sampler = mui4py.SamplerPseudoNearestNeighbor(rMUIFetcher)
 
+    # Commit ZERO step before time stepping
+    ifaces3d["threeDInterface0"].commit(0)
+    print(f"{{FENICS}} Commit ZERO step")
+
 # -------------------------
 #%% Time-stepping loop
 # -------------------------
@@ -486,13 +495,13 @@ for step in range(1, num_steps + 1):
     solver.solve(b, uh.x.petsc_vec)
     uh.x.scatter_forward()
 
-    # Compute heat flux across the coupled boundary
+    # Compute heat flux across the left boundary
     total_flux_push = compute_heat_flux_on_left_boundary(t, uh, kappa)
     total_flux = compute_total_left_heat_flux(uh)
     if not quiet:
         if LOCAL_COMM_WORLD.rank == 0:
             # positive flux means heat leaving the solid across the boundary (sign follows -kappa*grad·n)
-            print(f"{{FENICS}}  Total heat flux across coupled boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
+            print(f"{{FENICS}}  Total heat flux across left boundary (integral) = {total_flux:.6e}; and total heat flux push (DOF sum) = {total_flux_push:.6e}")
 
     # Update u_n for next time step
     u_n.x.array[:] = uh.x.array
@@ -520,6 +529,6 @@ if LOCAL_COMM_WORLD.rank == 0:
     print("{{FENICS}} Run complete.")
 
 if iMUICoupling:
-    MPI.Finalize()
+    ifaces3d["threeDInterface0"].barrier(-888)
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%  FILE END  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%#

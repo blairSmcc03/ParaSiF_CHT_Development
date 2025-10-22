@@ -31,7 +31,7 @@ int main(int argc, char ** argv) {
 
 #else
 
-    uniface<mui::pusher_fetcher_config> ifs( "mpi://PUSHER_FETCHER_1/threeDInterface0"  );
+    uniface<mui::pusher_fetcher_config> ifs( "mpi://PUSHER_FETCHER_1/threeDInterface0" );
 
     MPI_Comm  world = mui::mpi_split_by_app();
 
@@ -44,6 +44,7 @@ int main(int argc, char ** argv) {
     MPI_Comm_size( world, &size );
 
     // setup parameters
+    bool debug = false; // mode of debug message print
     constexpr static int    Nx        = 2; // number of grid points in x axis
     constexpr static int    Ny        = 10; // number of grid points in y axis
     constexpr static int    Nz        = 10; // number of grid points in z axis
@@ -51,7 +52,7 @@ int main(int argc, char ** argv) {
     const char* name_fetchY = "heatFluxy";
     const char* name_fetchZ = "heatFluxz";
     const char* name_push = "temperature";
-    double r    = 1.0;                      // search radius
+    double r    = 1.0; // search radius
     int Nt = Nx * Ny * Nz; // total time steps
     int steps = 200; // total time steps
     int nSubIter = 1; // total time steps
@@ -158,11 +159,13 @@ int main(int argc, char ** argv) {
                         if (std::abs(pp[i][j][k][0] + 1.0) <= 0.00001 ){
                             point3d locp( pp[i][j][k][0], pp[i][j][k][1], pp[i][j][k][2] );
 #if IMUI_MULTIDOMAIN
-                            ifs[0]->push( name_push, locp, 500. );
+                            ifs[0]->push( name_push, locp, temperature_push[i][j][k] );
 #else
                             ifs.push( name_push, locp, temperature_push[i][j][k] );
 #endif
-                            // std::cout << "!!{PUSHER_FETCHER_1} push point: " <<  locp[0] << ", " <<  locp[1] << ", "<<  locp[2] << std::endl;
+                            if (debug) {
+                                std::cout << "{PUSHER_FETCHER_1} push point: " <<  locp[0] << ", " <<  locp[1] << ", "<<  locp[2] << " with value: " << temperature_push[i][j][k] << std::endl;
+                            }
                         }
                     }
                 }
@@ -173,6 +176,8 @@ int main(int argc, char ** argv) {
 #else
             int sent = ifs.commit( totalIter );
 #endif
+            std::cout << "{PUSHER_FETCHER_1} commit at " <<  totalIter << std::endl;
+
             if ((totalIter)>=0){
                 // push data to the other solver
                 for ( int i = 0; i < Nx; ++i ) {
@@ -181,32 +186,45 @@ int main(int argc, char ** argv) {
                             if (std::abs(pf[i][j][k][0] + 1.0) <= 0.00001 ){
                                 point3d locf( pf[i][j][k][0], pf[i][j][k][1], pf[i][j][k][2] );
 #if IMUI_MULTIDOMAIN
-/*                                 heatFlux_fetchX[i][j][k] = ifs[0]->fetch( name_fetchX, locf,
-                                    (totalIter),
-                                    s1,
-                                    s2 );
-                                heatFlux_fetchY[i][j][k] = ifs[0]->fetch( name_fetchY, locf,
-                                    (totalIter),
-                                    s1,
-                                    s2 );
-                                heatFlux_fetchZ[i][j][k] = ifs[0]->fetch( name_fetchZ, locf,
-                                    (totalIter),
-                                    s1,
-                                    s2 ); */
+                                heatFlux_fetchX[i][j][k] = ifs[0]->fetch(   name_fetchX,
+                                                                            locf,
+                                                                            (totalIter),
+                                                                            s1,
+                                                                            s2 );
+                                heatFlux_fetchY[i][j][k] = ifs[0]->fetch(   name_fetchY,
+                                                                            locf,
+                                                                            (totalIter),
+                                                                            s1,
+                                                                            s2 );
+                                heatFlux_fetchZ[i][j][k] = ifs[0]->fetch(   name_fetchZ,
+                                                                            locf,
+                                                                            (totalIter),
+                                                                            s1,
+                                                                            s2 );
 #else
-                                heatFlux_fetchX[i][j][k] = ifs.fetch( name_fetchX, locf,
-                                    (totalIter-1),
-                                    s1,
-                                    s2 );
-                                heatFlux_fetchY[i][j][k] = ifs.fetch( name_fetchY, locf,
-                                    (totalIter-1),
-                                    s1,
-                                    s2 );
-                                heatFlux_fetchZ[i][j][k] = ifs.fetch( name_fetchZ, locf,
-                                    (totalIter-1),
-                                    s1,
-                                    s2 );
+                                heatFlux_fetchX[i][j][k] = ifs.fetch(   name_fetchX,
+                                                                        locf,
+                                                                        (totalIter),
+                                                                        s1,
+                                                                        s2 );
+                                heatFlux_fetchY[i][j][k] = ifs.fetch(   name_fetchY,
+                                                                        locf,
+                                                                        (totalIter),
+                                                                        s1,
+                                                                        s2 );
+                                heatFlux_fetchZ[i][j][k] = ifs.fetch(   name_fetchZ,
+                                                                        locf,
+                                                                        (totalIter),
+                                                                        s1,
+                                                                        s2 );
 #endif
+                                if (debug) {
+                                    std::cout << "{dummy_Fluid}: name_fetchX: " << name_fetchX
+                                                << " locf: " << locf[0] << ", " << locf[1] << ", " << locf[2]
+                                                << " totalIter: " << totalIter
+                                                << " heatFlux_fetchX[i][j][k]: " << heatFlux_fetchX[i][j][k]
+                                                << std::endl;
+                                }
                                 total_flux += heatFlux_fetchX[i][j][k];
                             }
                         }
@@ -220,6 +238,6 @@ int main(int argc, char ** argv) {
             heatFluxOutFile.close();
         }
     }
-
+    ifs[0]->barrier(-888);
     return 0;
 }
