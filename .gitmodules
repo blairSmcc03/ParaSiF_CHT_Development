@@ -7,3 +7,6 @@
 [submodule "structure/src/heatSolverPy"]
 	path = structure/src/heatSolverPy
 	url = https://github.com/blairSmcc03/heatSolverPy.git
+[submodule "structure/src/heatSolverFenicsX"]
+	path = structure/src/heatSolverFenicsX
+	url = https://github.com/blairSmcc03/heatSolverFenicsX.git

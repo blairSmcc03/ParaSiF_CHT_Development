@@ -1,0 +1,49 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2506                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       dictionary;
+    location    "14.4/uniform/functionObjects";
+    object      functionObjectProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+cdf7e925f5746741c316f5fbcf39ad0dfca90775
+{
+    plotTemperature
+    {
+        scalar
+        {
+            average(line,T) 273.2055235083613;
+            min(line,T)     273.123309211628;
+            max(line,T)     274.1312588654729;
+            average(T)      273.2055235083613;
+            min(T)          273.123309211628;
+            max(T)          274.1312588654729;
+        }
+        label
+        {
+            size(line,T)    500;
+            size(T)         500;
+        }
+    }
+}
+
+plotTemperature
+{
+    T
+    {
+        file            "<case>/postProcessing/plotTemperature/14.4/line_T.xy";
+    }
+}
+
+
+// ************************************************************************* //
