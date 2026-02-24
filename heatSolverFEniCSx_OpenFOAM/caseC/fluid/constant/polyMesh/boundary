@@ -22,36 +22,36 @@ FoamFile
     {
         type            wall;
         inGroups        1(wall);
-        nFaces          20;
-        startFace       760;
+        nFaces          5;
+        startFace       40;
     }
     rightWall
     {
         type            wall;
         inGroups        1(wall);
-        nFaces          20;
-        startFace       780;
+        nFaces          5;
+        startFace       45;
     }
     topWall
     {
         type            wall;
         inGroups        1(wall);
-        nFaces          20;
-        startFace       800;
+        nFaces          5;
+        startFace       50;
     }
     bottomWall
     {
         type            wall;
         inGroups        1(wall);
-        nFaces          20;
-        startFace       820;
+        nFaces          5;
+        startFace       55;
     }
     frontAndBackPlanes
     {
         type            empty;
         inGroups        1(empty);
-        nFaces          800;
-        startFace       840;
+        nFaces          50;
+        startFace       60;
     }
 )
 

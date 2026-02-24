@@ -23,7 +23,7 @@ alpha_val = 0.003
 T0 = 273.15
 
 # mesh parameters
-nx, ny, nz = 20, 20, 1  # mesh divisions
+nx, ny, nz = 5, 5, 1  # mesh divisions
 lx, ly, lz = 0.2, 1.0, 0.01  # domain lengths
 
 
