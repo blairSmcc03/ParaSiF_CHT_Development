@@ -8,5 +8,5 @@
 	path = structure/src/heatSolverFenicsX
 	url = https://github.com/blairSmcc03/heatSolverFenicsX.git
 [submodule "customCHTBoundaryConditions"]
-	path = customCHTBoundaryConditions
+	path = fluid/src/libs/customCHTBoundaryConditions
 	url = https://github.com/blairSmcc03/customCHTBoundaryConditions.git
