@@ -1,9 +1,13 @@
 [submodule "structure/src/heatSolverPy"]
 	path = structure/src/heatSolverPy
 	url = https://github.com/blairSmcc03/heatSolverPy.git
+	branch = master
 [submodule "structure/src/heatSolverFenicsX"]
 	path = structure/src/heatSolverFenicsX
 	url = https://github.com/blairSmcc03/heatSolverFenicsX.git
+	branch = master
 [submodule "customCHTBoundaryConditions"]
 	path = fluid/src/libs/customCHTBoundaryConditions
 	url = https://github.com/blairSmcc03/customCHTBoundaryConditions.git
+[submodule "fluid/src/libs/customCHTBoundaryConditions"]
+	branch = master
