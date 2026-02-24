@@ -1,6 +1,3 @@
-[submodule "coupling_lib/MUI"]
-	path = coupling_lib/MUI
-	url = https://github.com/MxUI/MUI.git
 [submodule "structure/src/heatSolverPy"]
 	path = structure/src/heatSolverPy
 	url = https://github.com/blairSmcc03/heatSolverPy.git
