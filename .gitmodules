@@ -1,12 +1,12 @@
 [submodule "coupling_lib/MUI"]
 	path = coupling_lib/MUI
 	url = https://github.com/MxUI/MUI.git
-[submodule "fluid/src/libs/customCHTBoundaryConditions"]
-	path = fluid/src/libs/customCHTBoundaryConditions
-	url = https://github.com/blairSmcc03/customCHTBoundaryConditions.git
 [submodule "structure/src/heatSolverPy"]
 	path = structure/src/heatSolverPy
 	url = https://github.com/blairSmcc03/heatSolverPy.git
 [submodule "structure/src/heatSolverFenicsX"]
 	path = structure/src/heatSolverFenicsX
 	url = https://github.com/blairSmcc03/heatSolverFenicsX.git
+[submodule "customCHTBoundaryConditions"]
+	path = customCHTBoundaryConditions
+	url = https://github.com/blairSmcc03/customCHTBoundaryConditions.git
