@@ -57,11 +57,11 @@ solvers
 }
 
 PIMPLE
-{
-    nCorrectors 1;
-    nOuterCorrectors 1;
-    momentumPredictor   yes;
-    pRefCell    0;
+{   
+    nCorrectors 0;
+    nOuterCorrectors 4;
+    momentumPredictor   no;
+    pRefCell    40;
     pRefValue    1e5;
 }
 

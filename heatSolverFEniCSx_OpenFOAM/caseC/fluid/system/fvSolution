@@ -59,10 +59,11 @@ solvers
 PIMPLE
 {
     nCorrectors 1;
-    nOuterCorrectors 1;
-    momentumPredictor   yes;
-    pRefCell    0;
+    nOuterCorrectors 8;
+    momentumPredictor   no;
+    pRefPoint (0.1 0.1 0.005);
     pRefValue    1e5;
+    consistent  yes;
 }
 
 relaxationFactors
