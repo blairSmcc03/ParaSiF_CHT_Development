@@ -9,4 +9,4 @@
 [submodule "customCHTBoundaryConditions"]
 	path = fluid/src/libs/customCHTBoundaryConditions
 	url = https://github.com/blairSmcc03/customCHTBoundaryConditions.git
-	branch = master
+	branch = main
