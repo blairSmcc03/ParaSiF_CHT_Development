@@ -12,9 +12,11 @@ cp -r fluid/0.orig fluid/0
 
 blockMesh -case fluid
 
-mpirun --np 1 buoyantPimpleFoam -case fluid -parallel -mpi-split-by-appnum : -np 1 python3  -m solver.py
+decomposePar -force -case fluid
 
-reconstructPar
+mpirun --np 4 buoyantPimpleFoam -case fluid -parallel -mpi-split-by-appnum : -np 2 python3 -m solver
+
+reconstructPar -case fluid
 
 postProcess -case fluid
 

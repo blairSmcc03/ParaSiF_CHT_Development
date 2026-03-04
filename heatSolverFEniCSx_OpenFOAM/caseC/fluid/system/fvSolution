@@ -59,7 +59,7 @@ solvers
 PIMPLE
 {
     nCorrectors 1;
-    nOuterCorrectors 8;
+    nOuterCorrectors 2;
     momentumPredictor   no;
     pRefPoint (0.1 0.1 0.005);
     pRefValue    1e5;

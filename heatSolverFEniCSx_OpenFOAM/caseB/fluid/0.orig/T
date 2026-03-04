@@ -30,7 +30,7 @@ boundaryField
 
     rightWall
     {   
-        type            customNeumannDirichletCoupledBoundary;
+        type            DirichletCoupledBoundary;
         value           uniform 273.15;
         kappaMethod     fluidThermo;
     }
