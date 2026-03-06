@@ -12,6 +12,15 @@ Ongoing development of ParaSiF new feature on **Conjugate Heat Transfer** betwee
 This codebase is currently comprised of two solvers which are git submodules to this repository. For the solid region a FEM based solver, [heatSolverFenicX](https://github.com/blairSmcc03/heatSolverFenicsX), is used. For the fluid region Openfoam is used with [Coupled custom boundary conditions](https://github.com/blairSmcc03/customCHTBoundaryConditions) which perform the coupling operations.
 ---
 
+## Future Improvements
+
+This code is still a work in progress, there several improvements that could be made such as:
+
+- Adding Aitken/fixed relaxation to the MUI fetch to improve convergence during strong coupling.
+- Adding RBF sampler for heat flux across interface to support non-conforming meshes
+- Re-integrate support for temporal sampling when using Strong Coupling (this is not really well defined)
+- Optimise FEniCSx Computational Efficiency.
+
 ## Repository Structure
 
 ```
